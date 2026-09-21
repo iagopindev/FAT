@@ -237,6 +237,20 @@ button.sm:not(.ghost){background:var(--cafe);color:#fff}
 .toast.on{transform:translate(-50%,0)}
 .toast.erro{background:var(--erro)}.toast.alerta{background:var(--alerta)}
 
+/* teia por grupo — resumo */
+.teiaBox{margin:18px 0 6px}
+.teiaWrap{display:grid;grid-template-columns:minmax(240px,1fr) minmax(170px,240px);
+  gap:14px;align-items:center;background:#fff;border:1px solid var(--linha);
+  border-radius:11px;padding:14px 16px}
+.teiaG{min-width:0}
+.teiaLi{display:grid;grid-template-columns:1fr auto;align-items:baseline;gap:4px 10px;
+  padding:7px 0;border-bottom:1px solid var(--linha)}
+.teiaLi:last-child{border-bottom:0}
+.teiaLi span{font-size:13px;color:var(--tinta)}
+.teiaLi b{font-size:15px;color:#5D4037}
+.teiaLi i{grid-column:1/-1;font-style:normal;font-size:11px;color:var(--fraco)}
+@media(max-width:700px){.teiaWrap{grid-template-columns:1fr}}
+
 /* impressao / PDF */
 #printArea{display:none}
 @media print{
@@ -480,6 +494,7 @@ function codigoExibicao() {
 var ASSUMPTIONS_VERSION = 4;
 var AS = {
   sacas:    { valor:'dividir', kgPorSaca:60, sanidade:{min:15,max:130} },
+  pn:       { sanidade:{min:5,max:20} },
   pontuacao:{ valor:'ambas' },
   formaPK:  { valor:'oxido', fatorP:0.4364, fatorK:0.8301 },
   arred:    { npk:2, pn:2, pct:2 },
@@ -1116,6 +1131,15 @@ function validar(resp, fs, calc, ctx) {
     add('erro','q111ha','1.11 — Há fertilizante lançado, mas a área de café está em branco ou zerada: não é possível calcular o N aplicado por hectare.');
   if (rend !== null && rend > 0 && calc.pn === null && !calc.semNsintetico)
     add('alerta','q111pn','1.11 — A Produtividade do N não pôde ser calculada. Verifique quantidade de fertilizante, teor de N e área de café.');
+  /* PN (kg de cafe verde por kg de N) — apenas sinalizacao de sanidade.
+     Nao altera pontuacao nem bloqueia o lancamento. */
+  if (calc.pn !== null && calc.pn !== undefined &&
+      (calc.pn < AS.pn.sanidade.min || calc.pn > AS.pn.sanidade.max))
+    add('alerta','q111pn','1.11 — A Produtividade do N calculada (' + fmtN(calc.pn) +
+        ' kg de café verde por kg de N) está fora da faixa usual de ' +
+        AS.pn.sanidade.min + ' a ' + AS.pn.sanidade.max +
+        '. Confira o rendimento em kg/ha, os teores de N das fertilizantes e a área de café.');
+
   if (calc.sacasForaDaFaixa)
     add('alerta','q111y','Produção — A produtividade resultante (' + calc.produtividadeScHa + ' sc/ha) está fora da faixa usual de ' + AS.sacas.sanidade.min + ' a ' + AS.sacas.sanidade.max + ' sc/ha. Confira o rendimento em kg/ha e a área.');
   if (ctx.areaVinculo && ha !== null) {
@@ -1573,6 +1597,90 @@ function fmtD(d) {
   return isNaN(x) ? String(d) : x.toLocaleDateString('pt-BR');
 }
 
+/* ==========================================================================
+   13b. DESEMPENHO POR GRUPO — derivado da trilha, nao recalcula nada
+   ========================================================================== */
+/* Espelha exatamente a regra global: itens NA saem do denominador,
+   pendentes contam no denominador com 0 ponto. */
+function scorePorSecao(reg) {
+  var res = reg.resultado || {}, trilha = res.trilha || [], acc = {};
+  SECTIONS.forEach(function (s) { acc[s.id] = { id:s.id, nome:s.nome, pontos:0, max:0 }; });
+  trilha.forEach(function (t) {
+    var a = acc[t.secao];
+    if (!a || t.estado === 'na') return;
+    a.max += 1;
+    if (typeof t.pontos === 'number') a.pontos += t.pontos;
+  });
+  return SECTIONS.map(function (s) {
+    var a = acc[s.id];
+    a.pontos = round(a.pontos, 2);
+    a.pct = a.max > 0 ? round(a.pontos / a.max * 100, 1) : null;
+    return a;
+  });
+}
+
+/* Radar em SVG puro: sem dependencia externa, renderiza offline e imprime. */
+function radarSVG(dados, opt) {
+  opt = opt || {};
+  var W = opt.size || 300, cx = W / 2, cy = W / 2 + (opt.deslocaY || 0),
+      R = opt.raio || (W * 0.33), n = dados.length,
+      corLinha = opt.corLinha || '#D8CEC4', corArea = opt.corArea || '#5D4037',
+      corTexto = opt.corTexto || '#6E635C', fonte = opt.fonte || 10,
+      aneis = [25, 50, 75, 100], s = '', i, k;
+
+  if (!n) return '';
+  function pt(idx, pct) {
+    var ang = -Math.PI / 2 + (2 * Math.PI * idx / n), r = R * (pct / 100);
+    return [cx + r * Math.cos(ang), cy + r * Math.sin(ang)];
+  }
+  function poly(pct) {
+    var p = [], j;
+    for (j = 0; j < n; j++) p.push(pt(j, pct).map(function (v) { return v.toFixed(1); }).join(','));
+    return p.join(' ');
+  }
+
+  /* folga lateral/vertical para os rotulos dos eixos nao serem cortados */
+  var padX = opt.padX || Math.round(R * 0.85), padY = opt.padY || 26,
+      vbW = W + padX * 2, vbH = W + (opt.deslocaY || 0) * 2 + padY * 2;
+  s += '<svg viewBox="' + (-padX) + ' ' + (-padY) + ' ' + vbW + ' ' + vbH + '" width="100%" ' +
+       'preserveAspectRatio="xMidYMid meet" role="img" aria-label="Desempenho por grupo avaliado" ' +
+       'xmlns="http://www.w3.org/2000/svg" style="display:block;max-width:' + vbW + 'px;margin:0 auto">';
+
+  for (k = 0; k < aneis.length; k++)
+    s += '<polygon points="' + poly(aneis[k]) + '" fill="none" stroke="' + corLinha +
+         '" stroke-width="' + (aneis[k] === 100 ? 1.1 : 0.6) + '"/>';
+
+  for (i = 0; i < n; i++) {
+    var e = pt(i, 100);
+    s += '<line x1="' + cx + '" y1="' + cy + '" x2="' + e[0].toFixed(1) + '" y2="' + e[1].toFixed(1) +
+         '" stroke="' + corLinha + '" stroke-width="0.6"/>';
+  }
+
+  /* area de desempenho: grupos sem base avaliavel entram como 0 para fechar o poligono */
+  var pontos = [], marcas = '';
+  for (i = 0; i < n; i++) {
+    var v = dados[i].pct === null || dados[i].pct === undefined ? 0 : dados[i].pct, p = pt(i, v);
+    pontos.push(p[0].toFixed(1) + ',' + p[1].toFixed(1));
+    marcas += '<circle cx="' + p[0].toFixed(1) + '" cy="' + p[1].toFixed(1) +
+              '" r="2.6" fill="' + corArea + '"/>';
+  }
+  s += '<polygon points="' + pontos.join(' ') + '" fill="' + corArea +
+       '" fill-opacity="0.18" stroke="' + corArea + '" stroke-width="1.6" stroke-linejoin="round"/>' + marcas;
+
+  for (i = 0; i < n; i++) {
+    var lp = pt(i, 118), ax = lp[0], ay = lp[1],
+        anc = Math.abs(ax - cx) < 6 ? 'middle' : (ax > cx ? 'start' : 'end'),
+        rot = dados[i].pct === null || dados[i].pct === undefined ? 'n/a' : fmtN(dados[i].pct) + '%';
+    s += '<text x="' + ax.toFixed(1) + '" y="' + ay.toFixed(1) + '" text-anchor="' + anc +
+         '" font-size="' + fonte + '" font-weight="600" fill="' + corTexto + '">' + esc(dados[i].nome) + '</text>' +
+         '<text x="' + ax.toFixed(1) + '" y="' + (ay + fonte + 1.5).toFixed(1) + '" text-anchor="' + anc +
+         '" font-size="' + (fonte - 1) + '" fill="' + corArea + '" font-weight="700">' + rot + '</text>';
+  }
+
+  s += '</svg>';
+  return s;
+}
+
 function relatorioHTML(reg) {
   var v = reg.vinculo || {}, c = reg.calculados || {}, res = reg.resultado || {},
       n = reg.nivel || {}, val = reg.validacao || {}, ox = AS.formaPK.valor === 'oxido';
@@ -1592,6 +1700,19 @@ function relatorioHTML(reg) {
     '<div>FAT SCORE<strong>' + fmtN(res.pontosObtidos) + ' / ' + (res.maximoAplicavel || '—') + '</strong></div>' +
     '<div>FAT %<strong>' + (res.fatPercent === null || res.fatPercent === undefined ? '—' : fmtN(res.fatPercent) + '%') + '</strong></div>' +
     '<div>NÍVEL FAT<strong>' + esc(n.nivel || 'Não classificado') + '</strong></div></div>';
+
+  var porSec = scorePorSecao(reg);
+  h += '<h2>Desempenho por grupo avaliado</h2>' +
+    '<div class="relTeia"><div class="relTeiaG">' +
+    radarSVG(porSec, { size:300, raio:95, deslocaY:6, fonte:9 }) +
+    '</div><table class="relTeiaT"><tr><th>Grupo</th><th>Pontos</th><th>Máx.</th><th>%</th></tr>' +
+    porSec.map(function (p) {
+      return '<tr><td>' + esc(p.nome) + '</td><td>' + fmtN(p.pontos) + '</td><td>' + p.max +
+        '</td><td><b>' + (p.pct === null ? '—' : fmtN(p.pct) + '%') + '</b></td></tr>';
+    }).join('') + '</table></div>' +
+    '<p class="relTeiaN">Percentual de cada grupo sobre a pontuação aplicável do próprio grupo. ' +
+    'Itens NA são excluídos do denominador; itens pendentes permanecem com zero ponto, ' +
+    'na mesma regra do FAT % geral.</p>';
 
   h += '<h2>Critérios de nível</h2><ul class="relCrit">';
   (n.atendidos || []).forEach(function (a) {
@@ -1692,6 +1813,13 @@ var REPORT_CSS =
 '.qC{width:34px;font-weight:700;color:#5D4037}' +
 '.qV{width:120px;font-weight:700;color:#3E2723}' +
 '.qP{width:34px;text-align:right;color:#6E635C}' +
+'.relTeia{display:grid;grid-template-columns:1fr 46%;gap:10px;align-items:center;' +
+ 'page-break-inside:avoid;break-inside:avoid;margin-bottom:4px}' +
+'.relTeia svg{width:100%;height:auto}' +
+'.relTeiaT{width:100%;border-collapse:collapse;font-size:8.5pt}' +
+'.relTeiaT th{text-align:left;font-size:7pt;color:#6E635C;border-bottom:1px solid #C8A27A;padding:3px 5px}' +
+'.relTeiaT td{padding:3px 5px;border-bottom:.5px solid #E4DDD5}' +
+'.relTeiaN{font-size:7pt;color:#6E635C;margin:2px 0 0}' +
 '.relCrit{margin:0;padding-left:16px}' +
 '.relCrit li{font-size:8.5pt;margin-bottom:2px}' +
 '.relCrit .no{color:#B3261E}.relCrit .si{color:#2E7D32}' +
@@ -2300,6 +2428,20 @@ function renderResumo(box) {
     (res.nas && res.nas.length ? '<p class="nota">Itens NA (excluídos do denominador): ' + res.nas.join(', ') + '</p>' : '') +
     (n.bloqueadoPorRequisitoMinimo ? '<p class="msg erro">Requisito mínimo não atendido (4.03): ' +
       'nenhum nível é atribuído, independentemente da pontuação.</p>' : '');
+
+  var pSec = scorePorSecao(r);
+  box.appendChild(el('div','teiaBox',
+    '<h3 class="sub">Desempenho por grupo avaliado</h3>' +
+    '<div class="teiaWrap"><div class="teiaG">' +
+      radarSVG(pSec, { size:300, raio:92, deslocaY:8, fonte:10,
+                       corLinha:'#E4DDD5', corArea:'#5D4037', corTexto:'#6E635C' }) +
+    '</div><div class="teiaL">' +
+      pSec.map(function (p) {
+        return '<div class="teiaLi"><span>' + esc(p.nome) + '</span><b>' +
+          (p.pct === null ? '—' : fmtN(p.pct) + '%') + '</b><i>' +
+          fmtN(p.pontos) + ' / ' + p.max + ' pt</i></div>';
+      }).join('') +
+    '</div></div>'));
 
   cr = el('div','criterios','<h3 class="sub">Critérios de nível</h3>');
   (n.atendidos || []).forEach(function (a) {
