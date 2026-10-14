@@ -223,7 +223,7 @@ button.sm:not(.ghost){background:var(--cafe);color:#fff}
 .resAcoes{display:flex;gap:10px;flex-wrap:wrap}
 .resAcoes button{flex:1;min-width:150px;min-height:50px;border:1px solid var(--linha);
   background:var(--papel);border-radius:var(--r);color:var(--cafe2)}
-.resAcoes .primary{border-color:var(--cafe);color:#fff}
+.resAcoes .primary{border-color:#3E2723;background:#3E2723!important;color:#fff!important}
 .vazio{font-size:13px;color:var(--fraco);background:var(--papel);border:1px dashed var(--linha);
   border-radius:var(--r);padding:20px;text-align:center;line-height:1.6}
 .prog{display:none;background:var(--papel);border:1px solid var(--linha);
@@ -1416,7 +1416,7 @@ function zipStore(arquivos) {
   de.setUint32(0, 0x06054b50, true);
   de.setUint16(8, arquivos.length, true); de.setUint16(10, arquivos.length, true);
   de.setUint32(12, total, true); de.setUint32(16, offset, true);
-  return new Blob(partes.concat(central, [eocd]), { type:'application/octet-stream' });
+  return new Blob(partes.concat(central, [eocd]), { type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
 }
 
 function escX(s) {
@@ -1607,10 +1607,18 @@ function diagnosticar(registros) {
 }
 
 function baixar(blob, nome) {
-  var url = URL.createObjectURL(blob), a = document.createElement('a');
+  /* Mantem o MIME correto e o objeto vivo tempo suficiente para salvar/compartilhar no mobile. */
+  var tipoXlsx = /\.xlsx$/i.test(nome);
+  var tipo = tipoXlsx ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' : (blob.type || 'application/octet-stream');
+  var arquivo = blob.type === tipo ? blob : new Blob([blob], { type:tipo });
+  var url = URL.createObjectURL(arquivo), a = document.createElement('a');
   a.href = url; a.download = nome;
-  document.body.appendChild(a); a.click(); a.parentNode.removeChild(a);
-  setTimeout(function () { URL.revokeObjectURL(url); }, 4000);
+  a.setAttribute('type', tipo);
+  document.body.appendChild(a); a.click();
+  setTimeout(function () {
+    if (a.parentNode) a.parentNode.removeChild(a);
+    URL.revokeObjectURL(url);
+  }, 60000);
 }
 
 /* ==========================================================================
@@ -1864,13 +1872,47 @@ function docRelatorio(regs) {
     regs.map(relatorioHTML).join('') + '</body></html>';
 }
 
+function aguardarRelatorio(w, pronto) {
+  var d = w.document, finalizado = false, tentativas = 0;
+  function concluir() {
+    if (finalizado) return;
+    finalizado = true;
+    /* Dois frames garantem layout e pintura antes de abrir a impressão. */
+    w.requestAnimationFrame(function () {
+      w.requestAnimationFrame(function () { pronto(); });
+    });
+  }
+  function verificarImagens() {
+    var imgs = Array.prototype.slice.call(d.images || []);
+    if (!imgs.length) { concluir(); return; }
+    var pendentes = imgs.length;
+    function ok() { pendentes -= 1; if (pendentes <= 0) concluir(); }
+    imgs.forEach(function (img) {
+      if (img.complete) ok();
+      else { img.addEventListener('load', ok, { once:true }); img.addEventListener('error', ok, { once:true }); }
+    });
+  }
+  function iniciar() {
+    if (d.fonts && d.fonts.ready) d.fonts.ready.then(verificarImagens, verificarImagens);
+    else verificarImagens();
+  }
+  if (d.readyState === 'complete') iniciar();
+  else w.addEventListener('load', iniciar, { once:true });
+  /* Fallback controlado para navegadores moveis com eventos incompletos. */
+  var timer = setInterval(function () {
+    tentativas += 1;
+    if (finalizado) clearInterval(timer);
+    else if (tentativas >= 20) { clearInterval(timer); concluir(); }
+  }, 100);
+}
+
 function imprimirEmJanela(html) {
   var w = null;
   try { w = window.open('', '_blank'); } catch (e) {}
   if (!w) { aviso('Não foi possível abrir a janela de impressão. Libere pop-ups para este arquivo.','erro'); return; }
   try {
     w.document.open(); w.document.write(html); w.document.close();
-    setTimeout(function () { try { w.focus(); w.print(); } catch (e) {} }, 500);
+    aguardarRelatorio(w, function () { try { w.focus(); w.print(); } catch (e) {} });
   } catch (e) {
     aviso('Falha ao montar o relatório para impressão.','erro');
   }
@@ -1886,22 +1928,21 @@ function imprimirRelatorios(regs) {
   try {
     ifr = document.createElement('iframe');
     ifr.setAttribute('aria-hidden','true');
-    ifr.style.cssText = 'position:fixed;right:0;bottom:0;width:210mm;height:297mm;' +
-      'border:0;opacity:0;pointer-events:none;z-index:-1';
+    /* Fora da tela, mas renderizavel. opacity:0/z-index:-1 pode gerar PDF vazio em mobile. */
+    ifr.style.cssText = 'position:fixed;left:-220mm;top:0;width:210mm;height:297mm;' +
+      'border:0;pointer-events:none;background:#fff';
     document.body.appendChild(ifr);
     var d = ifr.contentWindow.document;
     d.open(); d.write(html); d.close();
-    var imprimir = function () {
+    aguardarRelatorio(ifr.contentWindow, function () {
       try {
         var w = ifr.contentWindow;
-        w.onafterprint = limpar;          /* limpa apenas depois da impressao */
+        w.onafterprint = limpar;
         w.focus();
         w.print();
-        setTimeout(limpar, 60000);        /* rede de seguranca */
+        setTimeout(limpar, 60000);
       } catch (e) { limpar(); imprimirEmJanela(html); }
-    };
-    if (d.readyState === 'complete') setTimeout(imprimir, 300);
-    else ifr.onload = function () { setTimeout(imprimir, 300); };
+    });
   } catch (e) {
     limpar();
     imprimirEmJanela(html);
