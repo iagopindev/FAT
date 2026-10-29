@@ -593,7 +593,8 @@ var ITEMS = [
 
  {id:'q110b',code:'1.10',section:'solo',exportCol:'W',
   text:'Total de fertilizante aplicado em kg por ha',
-  type:'number',unidade:'kg/ha',required:true,pontua:false},
+  help:'Preenchido automaticamente: (Total aplicado em 1.11 ÷ hectares de café em 1.11) + fertilizante orgânico (1.10)',
+  type:'number',auto:'totalFertHa',unidade:'kg/ha',required:true,pontua:false},
 
  {id:'q110c',code:'1.10',section:'solo',exportCol:'X',
   text:'Porcentagem de fertilizante orgânico em relação ao total aplicado por ha (orgânico/total × 100)',
@@ -1343,9 +1344,21 @@ function novoRegistro(sessao, vinculo, livre) {
     formVersion:FORM_VERSION, assumptionsVersion:ASSUMPTIONS_VERSION
   };
 }
+/* 1.10 Total de fertilizante aplicado (kg/ha) — preenchimento automatico:
+   (Total aplicado em 1.11 / Hectares de cafe em 1.11) + Fertilizante organico (1.10). */
+function totalFertHa(resp, fs) {
+  var qtd = ponderarNPK(fs).qtdTotal, ha = num(resp.q111ha), org = num(resp.q110a), sint;
+  if (qtd === null || qtd === undefined || qtd === 0) sint = 0;
+  else if (ha !== null && ha > 0) sint = qtd / ha;
+  else return null;                                   /* ha sintetico sem area: pendente */
+  if (sint === 0 && org === null) return null;        /* nada lancado ainda */
+  return round(sint + (org || 0), 2);
+}
 function recalcular(reg) {
   /* Unidade unica: kg (total no ano). Normaliza lancamentos antigos. */
   (reg.fertilizantes || []).forEach(function (f) { f.unidade = 'kg'; });
+  reg.respostas = reg.respostas || {};
+  reg.respostas.q110b = totalFertHa(reg.respostas, reg.fertilizantes);
   reg.calculados = calcular(reg.respostas, reg.fertilizantes);
   reg.resultado  = pontuar(reg.respostas, reg.calculados);
   reg.nivel      = determinarNivelFAT(reg.respostas, reg.resultado.fatPercent);
@@ -2288,6 +2301,11 @@ function campo(it) {
     ctrl = '<div class="ops">' + it.options.map(function (o) {
       return '<button class="op' + (val === o ? ' on' : '') + '" data-v="' + esc(o) + '">' + esc(o) + '</button>';
     }).join('') + '</div>';
+  } else if (it.type === 'number' && it.auto) {
+    ctrl = '<div class="calcBox">' + (val === null || val === undefined
+      ? '<em>pendente — depende dos campos de origem</em>'
+      : '<strong>' + esc(val) + '</strong>' + (it.unidade ? ' ' + esc(it.unidade) : '')) +
+      '<span class="lock">calculado · somente leitura</span></div>';
   } else if (it.type === 'number') {
     ctrl = '<div class="numBox"><input type="number" step="any" inputmode="decimal" value="' +
       (val === null || val === undefined ? '' : esc(val)) + '" data-n>' +
@@ -2658,6 +2676,8 @@ function rodarTestes() {
 
   var c = calcular(base(), f1);
   T('1.10c = 800/1000×100', 80, c.pctOrganico);
+  T('1.10 total auto = 1000/10 + 800', 900, totalFertHa(base(), f1));
+  T('1.10 total auto sem sintético = orgânico', 800, totalFertHa(base(), []));
   T('N aplicado/ha', 20, c.nAplicadoHa);
   T('PN = 3000/20', 150, c.pn);
   T('Sacas = 30000/60', 500, c.producaoSacas);
