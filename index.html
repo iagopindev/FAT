@@ -886,17 +886,23 @@ function calcular(resp, fs) {
     (o.produtividadeScHa < AS.sacas.sanidade.min || o.produtividadeScHa > AS.sacas.sanidade.max);
 
   /* Calculadora auxiliar de 3.05 — uso de agua na irrigacao (m3/ha/ano).
-     Litros = vazao (L/h) x n de emissores x tempo por rega (h) x dias de irrigacao.
-     m3/ha/ano = (Litros / 1000) / area irrigada (ha). */
-  var vz = num(resp.irrVazao), em = num(resp.irrEmissores),
-      tp = num(resp.irrHoras),  di = num(resp.irrDias),
-      ai = num(resp.irrArea);
-  if (ai === null || ai <= 0) ai = ha;                 /* padrao: area de cafe */
-  o.irrAreaUsada = ai;
-  o.irrLitrosAno = (vz > 0 && em > 0 && tp > 0 && di > 0) ? vz * em * tp * di : null;
-  o.irrM3Ano = o.irrLitrosAno === null ? null : round(o.irrLitrosAno / 1000, 2);
-  o.aguaIrrigacao = (o.irrM3Ano !== null && ai && ai > 0)
-    ? round(o.irrM3Ano / ai, 2) : null;
+     Emissores/ha = 10.000 m2 / (rua (m) x espacamento do emissor (m))
+     Horas de irrigacao = horas por dia necessarias para irrigar a AREA TOTAL de cafe.
+     Horas/ha/dia = horas de irrigacao da area total por dia / area de cafe (ha, item 1.11)
+     Litros/ha/ano = vazao (L/h) x emissores/ha x horas/ha/dia x dias/ano
+     m3/ha/ano = Litros/ha/ano / 1000.  Entradas de espacamento em cm. */
+  var eRua = num(resp.irrRua), ePl = num(resp.irrPlanta), eEm = num(resp.irrEspEmissor),
+      vz = num(resp.irrVazao), hd = num(resp.irrHoras), di = num(resp.irrDias);
+  o.irrEmissoresHa = (eRua > 0 && eEm > 0) ? round(1e8 / (eRua * eEm), 0) : null;
+  o.irrPlantasHa   = (eRua > 0 && ePl > 0) ? round(1e8 / (eRua * ePl), 0) : null;
+  o.irrAreaUsada = (ha && ha > 0) ? ha : null;
+  o.irrHorasHa = (hd > 0 && o.irrAreaUsada) ? hd / o.irrAreaUsada : null;
+  o.irrLitrosHaAno = (eRua > 0 && eEm > 0 && vz > 0 && o.irrHorasHa && di > 0)
+    ? vz * (1e8 / (eRua * eEm)) * o.irrHorasHa * di : null;
+  o.irrHorasHa = o.irrHorasHa === null ? null : round(o.irrHorasHa, 2);
+  o.aguaIrrigacao = o.irrLitrosHaAno === null ? null : round(o.irrLitrosHaAno / 1000, 2);
+  o.irrLPlantaDia = (o.irrLitrosHaAno !== null && o.irrPlantasHa > 0)
+    ? round(o.irrLitrosHaAno / di / (1e8 / (eRua * ePl)), 1) : null;
   return o;
 }
 
@@ -2369,15 +2375,18 @@ function painelIrrigacao() {
 
   box.innerHTML = '<div class="repHead"><strong>3.05 · Calculadora do uso de água</strong>' +
     '<span>Preencha os dados do sistema de irrigação. O valor em m³/ha/ano é calculado ' +
-    'e preenchido automaticamente na pergunta 3.05.</span></div>';
+    'e preenchido automaticamente na pergunta 3.05. <b>Horas de irrigação</b> = total de horas por dia ' +
+    'necessárias para irrigar a <b>área total</b> de café (todos os setores somados); o app divide ' +
+    'automaticamente pela área informada em 1.11.</span></div>';
 
   campos = el('div','fcGrid');
   campos.innerHTML = [
-    ['irrVazao','Vazão por emissor (L/h)','ex.: 4'],
-    ['irrEmissores','Número de emissores / aspersores',''],
-    ['irrHoras','Tempo por rega (h)',''],
-    ['irrDias','Dias de irrigação no ano',''],
-    ['irrArea','Área irrigada (ha)','padrão: área de café']
+    ['irrRua','Espaçamento entre ruas (cm)','ex.: 350'],
+    ['irrPlanta','Espaçamento entre plantas (cm)','ex.: 100'],
+    ['irrEspEmissor','Espaçamento do aspersor/gotejo (cm)','ex.: 50'],
+    ['irrVazao','Vazão do emissor (L/h)','ex.: 1,6'],
+    ['irrHoras','Horas de irrigação da área total (h/dia)','ex.: 40'],
+    ['irrDias','Dias de irrigação no ano (dias)','ex.: 90']
   ].map(function (f) {
     var v = r.respostas[f[0]];
     return '<label class="cp"><span>' + esc(f[1]) + '</span>' +
@@ -2388,15 +2397,14 @@ function painelIrrigacao() {
   box.appendChild(campos);
 
   res = el('div','fertRes');
+  var fx = function (v, suf) { return (v === null || v === undefined) ? '—' : fmtN(v) + (suf || ''); };
   res.innerHTML =
-    '<div><span>Litros / ano</span><strong>' +
-      (c.irrLitrosAno === null || c.irrLitrosAno === undefined ? '—' : fmtN(c.irrLitrosAno)) + '</strong></div>' +
-    '<div><span>m³ / ano</span><strong>' +
-      (c.irrM3Ano === null || c.irrM3Ano === undefined ? '—' : fmtN(c.irrM3Ano)) + '</strong></div>' +
-    '<div><span>Área usada</span><strong>' +
-      (c.irrAreaUsada === null || c.irrAreaUsada === undefined ? '—' : fmtN(c.irrAreaUsada) + ' ha') + '</strong></div>' +
-    '<div><span>m³ / ha / ano</span><strong>' +
-      (c.aguaIrrigacao === null || c.aguaIrrigacao === undefined ? '—' : fmtN(c.aguaIrrigacao)) + '</strong></div>' +
+    '<div><span>Emissores / ha</span><strong>' + fx(c.irrEmissoresHa) + '</strong></div>' +
+    '<div><span>Área de café</span><strong>' + fx(c.irrAreaUsada, ' ha') + '</strong></div>' +
+    '<div><span>Horas / ha / dia</span><strong>' + fx(c.irrHorasHa) + '</strong></div>' +
+    '<div><span>Plantas / ha</span><strong>' + fx(c.irrPlantasHa) + '</strong></div>' +
+    '<div><span>L / planta / dia</span><strong>' + fx(c.irrLPlantaDia) + '</strong></div>' +
+    '<div><span>m³ / ha / ano</span><strong>' + fx(c.aguaIrrigacao) + '</strong></div>' +
     '<div><span>Em 3.05</span><strong>' +
       (r.respostas.q305 === null || r.respostas.q305 === undefined || r.respostas.q305 === ''
         ? '—' : fmtN(r.respostas.q305)) + '</strong></div>';
@@ -2405,7 +2413,7 @@ function painelIrrigacao() {
   btn = el('button','addFert','Aplicar o valor calculado em 3.05');
   btn.onclick = function () {
     if (c.aguaIrrigacao === null || c.aguaIrrigacao === undefined) {
-      aviso('Preencha vazão, número de emissores, tempo por rega e dias de irrigação.','alerta');
+      aviso('Preencha espaçamento entre ruas, espaçamento do emissor, vazão, horas/dia, dias de irrigação e a área de café (1.11).','alerta');
       return;
     }
     var antes = r.respostas.q305;
@@ -2416,8 +2424,10 @@ function painelIrrigacao() {
   };
   box.appendChild(btn);
 
-  box.appendChild(el('p','nota','Referência da planilha: cerca de 400 L por árvore por rodada de irrigação. ' +
-    'Se a área irrigada ficar em branco, o cálculo usa a área de café informada em 1.11. ' +
+  box.appendChild(el('p','nota','Cálculo: emissores/ha = 10.000 m² ÷ (rua × espaçamento do emissor, em m); ' +
+    'horas/ha/dia = horas por dia para irrigar a área total ÷ área de café (1.11); ' +
+    'm³/ha/ano = vazão (L/h) × emissores/ha × horas/ha/dia × dias ÷ 1.000. ' +
+    'Espaçamentos em cm são convertidos automaticamente. Referência da planilha: cerca de 400 L por árvore por rodada. ' +
     'Você pode digitar o valor diretamente em 3.05 se preferir.'));
 
   ins = box.querySelectorAll('[data-ir]');
@@ -2664,15 +2674,18 @@ function rodarTestes() {
   T('Ureia/KCl: N aplicado por ha', 65, cu.nAplicadoHa);
   T('Ureia/KCl: PN = 3000/65', 46.15, cu.pn);
 
-  /* Calculadora de irrigação: 4 L/h × 5000 emissores × 6 h × 60 dias = 7.200.000 L */
-  var ci = calcular({ irrVazao:4, irrEmissores:5000, irrHoras:6, irrDias:60, q111ha:10 }, []);
-  T('Irrigação: litros/ano', 7200000, ci.irrLitrosAno);
-  T('Irrigação: m³/ano', 7200, ci.irrM3Ano);
-  T('Irrigação: m³/ha/ano (área de café)', 720, ci.aguaIrrigacao);
-  var ci2 = calcular({ irrVazao:4, irrEmissores:5000, irrHoras:6, irrDias:60, q111ha:10, irrArea:8 }, []);
-  T('Irrigação: área irrigada própria', 900, ci2.aguaIrrigacao);
+  /* Calculadora de irrigação: rua 350 cm × emissor 50 cm → 5.714,29 emissores/ha;
+     40 h/dia ÷ 10 ha = 4 h/ha/dia; 1,6 L/h × 4 h × 90 dias → 3.291,43 m³/ha/ano */
+  var ci = calcular({ irrRua:350, irrPlanta:100, irrEspEmissor:50, irrVazao:1.6, irrHoras:40, irrDias:90, q111ha:10 }, []);
+  T('Irrigação: horas/ha/dia', 4, ci.irrHorasHa);
+  T('Irrigação: sem área não calcula', null,
+    calcular({ irrRua:350, irrPlanta:100, irrEspEmissor:50, irrVazao:1.6, irrHoras:40, irrDias:90 }, []).aguaIrrigacao);
+  T('Irrigação: emissores/ha', 5714, ci.irrEmissoresHa);
+  T('Irrigação: plantas/ha', 2857, ci.irrPlantasHa);
+  T('Irrigação: m³/ha/ano', 3291.43, ci.aguaIrrigacao);
+  T('Irrigação: L/planta/dia', 12.8, ci.irrLPlantaDia);
   T('Irrigação: incompleta não calcula', null,
-    calcular({ irrVazao:4, irrEmissores:5000, q111ha:10 }, []).aguaIrrigacao);
+    calcular({ irrRua:350, irrVazao:1.6, irrHoras:4 }, []).aguaIrrigacao);
 
   var c = calcular(base(), f1);
   T('1.10c = 800/1000×100', 80, c.pctOrganico);
