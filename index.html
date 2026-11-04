@@ -2413,7 +2413,7 @@ function painelIrrigacao() {
   btn = el('button','addFert','Aplicar o valor calculado em 3.05');
   btn.onclick = function () {
     if (c.aguaIrrigacao === null || c.aguaIrrigacao === undefined) {
-      aviso('Preencha espaçamento entre ruas, espaçamento do emissor, vazão, horas para irrigar área total, dias de irrigação e a área de café (1.11).','alerta');
+      aviso('Preencha espaçamento entre ruas, espaçamento do emissor, vazão, horas totais, dias de irrigação e a área de café (1.11).','alerta');
       return;
     }
     var antes = r.respostas.q305;
