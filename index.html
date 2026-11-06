@@ -821,19 +821,19 @@ function ponderarNPK(fs) {
              qtdTotal: somaQ || 0, fertPrincipal:null,
              linhasValidas:0, motivo: fs.length ? 'quantidade_total_zero' : 'sem_linhas' };
   }
-  /* Ponderacao POR NUTRIENTE PRESENTE: cada nutriente e ponderado apenas entre os
-     fertilizantes que efetivamente o contem (teor > 0). Assim o volume de um
-     produto sem aquele nutriente (ex.: KCl, que nao tem N) nao dilui o teor dos
-     demais. Retorna tambem a MASSA de nutriente, usada nos calculos por hectare. */
+  /* Ponderacao pelo TOTAL de fertilizantes: teor medio = massa do nutriente /
+     quantidade total aplicada (todas as linhas com quantidade > 0). Produtos sem
+     o nutriente (teor zero ou vazio) contribuem com 0 kg de nutriente, mas sua
+     quantidade entra no denominador -> resulta no "formulado equivalente" da mistura.
+     Retorna tambem a MASSA de nutriente, usada nos calculos por hectare. */
   function nutriente(campo) {
-    var massa = 0, base = 0;
+    var massa = 0;
     linhas.forEach(function (f) {
       var t = num(f[campo]);
-      if (t === null || t <= 0) return;          /* ausente ou zero nao entra */
+      if (t === null || t <= 0) return;          /* sem teor: 0 kg de nutriente */
       massa += num(f.quantidade) * t / 100;      /* kg do nutriente */
-      base  += num(f.quantidade);                /* kg de produto que o contem */
     });
-    return { massa: massa, base: base, teor: base > 0 ? (massa / base * 100) : null };
+    return { massa: massa, base: somaQ, teor: somaQ > 0 ? (massa / somaQ * 100) : null };
   }
   var N = nutriente('n'), P = nutriente('p'), K = nutriente('k');
   var principal = linhas.slice().sort(function (a, b) {
@@ -867,8 +867,7 @@ function calcular(resp, fs) {
     ? round(org / tot * 100, AS.arred.pct) : null;
 
   var ha = num(resp.q111ha), rend = num(resp.q111y);
-  /* N por hectare vem da MASSA total de N aplicada, nao do teor ponderado —
-     o teor agora e a media apenas entre os produtos que contem N. */
+  /* N por hectare vem da MASSA total de N aplicada (equivale a teor ponderado x total). */
   o.nAplicadoHa = (npk.massaN > 0 && ha && ha > 0)
     ? round(npk.massaN / ha, AS.arred.pn) : null;
 
@@ -1132,7 +1131,7 @@ function validar(resp, fs, calc, ctx) {
     if (q === null || q === 0) add('alerta','fert.' + i + '.quantidade','1.11 — ' + rot + ' está sem quantidade aplicada e será ignorada no cálculo do NPK ponderado.');
     if (!f.unidade) add('erro','fert.' + i + '.unidade','1.11 — Informe a unidade da quantidade aplicada em ' + rot + '.');
     [['n',n,'N'],['p',p, ox ? 'P₂O₅' : 'P'],['k',k, ox ? 'K₂O' : 'K']].forEach(function (t) {
-      if (t[1] === null) add('alerta','fert.' + i + '.' + t[0],'1.11 — Teor de ' + t[2] + ' não informado em ' + rot + '; a ponderação usará apenas as linhas com teor preenchido.');
+      if (t[1] === null) add('alerta','fert.' + i + '.' + t[0],'1.11 — Teor de ' + t[2] + ' não informado em ' + rot + '; será considerado 0% na ponderação pelo total aplicado.');
       else if (t[1] < 0 || t[1] > 100) add('erro','fert.' + i + '.' + t[0],'1.11 — Teor de ' + t[2] + ' em ' + rot + ' (' + t[1] + '%) está fora do intervalo possível de 0 a 100%.');
     });
     var soma = (n || 0) + (p || 0) + (k || 0);
@@ -2655,19 +2654,27 @@ function rodarTestes() {
   var r3 = ponderarNPK(f3);
   T('NPK: N ponderado', 20, r3.nPond);
   T('NPK: P ponderado', 10, r3.pPond);
-  T('NPK: K ponderado (B tem K=0, não dilui)', 20, r3.kPond);
+  T('NPK: K ponderado (B tem K=0, dilui pelo total)', 15, r3.kPond);
   T('NPK: principal (maior %N)','B', r3.fertPrincipal);
   T('NPK: quantidade zero', null, ponderarNPK([{ n:20, quantidade:0 }]).nPond);
-  T('NPK: teor vazio ignorado', 20, ponderarNPK([{ n:20, quantidade:1000 },{ n:null, quantidade:1000 }]).nPond);
+  T('NPK: teor vazio = 0 (dilui pelo total)', 10, ponderarNPK([{ n:20, quantidade:1000 },{ n:null, quantidade:1000 }]).nPond);
 
-  /* Ureia + 19-04-19 + KCl: cada nutriente ponderado só entre quem o contém */
+  /* Ureia + 19-04-19 + KCl: todos os nutrientes ponderados pelo total aplicado */
   var fu = [{ nome:'Ureia',    n:46, p:0,  k:0,  quantidade:1000, unidade:'kg' },
             { nome:'19-04-19', n:19, p:4,  k:19, quantidade:1000, unidade:'kg' },
             { nome:'KCl',      n:0,  p:0,  k:60, quantidade:1000, unidade:'kg' }];
   var ru = ponderarNPK(fu);
-  T('Ureia/KCl: N = (460+190)/2000', 32.5, ru.nPond);
-  T('Ureia/KCl: P = 40/1000', 4, ru.pPond);
-  T('Ureia/KCl: K = (190+600)/2000', 39.5, ru.kPond);
+  T('Ureia/KCl: N = (460+190)/3000', 21.67, ru.nPond);
+  T('Ureia/KCl: P = 40/3000', 1.33, ru.pPond);
+  T('Ureia/KCl: K = (190+600)/3000', 26.33, ru.kPond);
+  /* Ureia + MAP + KCl + Nitrato de cálcio, 100 kg cada */
+  var fm = ponderarNPK([{ nome:'Ureia', n:46, p:0, k:0, quantidade:100 },
+            { nome:'MAP', n:11, p:52, k:0, quantidade:100 },
+            { nome:'KCl', n:0, p:0, k:60, quantidade:100 },
+            { nome:'Nitrato de cálcio', n:15.5, p:0, k:0, quantidade:100 }]);
+  T('Mistura 4x100: N = 72,5/400', 18.13, fm.nPond);
+  T('Mistura 4x100: P = 52/400', 13, fm.pPond);
+  T('Mistura 4x100: K = 60/400', 15, fm.kPond);
   T('Ureia/KCl: massa de N', 650, ru.massaN);
   T('Ureia/KCl: quantidade total', 3000, ru.qtdTotal);
   var cu = calcular({ q111ha:10, q111y:3000 }, fu);
