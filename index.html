@@ -863,6 +863,7 @@ function ponderarNPK(fs) {
   };
 }
 
+var IRR_ALERTA_MM = 800; /* alerta de valor alto (mm/ano) */
 function calcular(resp, fs) {
   var npk = ponderarNPK(fs), o = {};
   o.nPond = npk.nPond; o.pPond = npk.pPond; o.kPond = npk.kPond;
@@ -893,24 +894,40 @@ function calcular(resp, fs) {
   o.sacasForaDaFaixa = o.produtividadeScHa !== null &&
     (o.produtividadeScHa < AS.sacas.sanidade.min || o.produtividadeScHa > AS.sacas.sanidade.max);
 
-  /* Calculadora auxiliar de 3.05 — uso de agua na irrigacao (m3/ha/ano).
-     Emissores/ha = 10.000 m2 / (rua (m) x espacamento do emissor (m))
-     Horas de irrigacao = horas por dia necessarias para irrigar a AREA TOTAL de cafe.
-     Horas/ha/dia = horas de irrigacao da area total por dia / area de cafe (ha, item 1.11)
-     Litros/ha/ano = vazao (L/h) x emissores/ha x horas/ha/dia x dias/ano
-     m3/ha/ano = Litros/ha/ano / 1000.  Entradas de espacamento em cm. */
-  var eRua = num(resp.irrRua), ePl = num(resp.irrPlanta), eEm = num(resp.irrEspEmissor),
-      vz = num(resp.irrVazao), hd = num(resp.irrHoras), di = num(resp.irrDias);
-  o.irrEmissoresHa = (eRua > 0 && eEm > 0) ? round(1e8 / (eRua * eEm), 0) : null;
-  o.irrPlantasHa   = (eRua > 0 && ePl > 0) ? round(1e8 / (eRua * ePl), 0) : null;
-  o.irrAreaUsada = (ha && ha > 0) ? ha : null;
-  o.irrHorasHa = (hd > 0 && o.irrAreaUsada) ? hd / o.irrAreaUsada : null;
-  o.irrLitrosHaAno = (eRua > 0 && eEm > 0 && vz > 0 && o.irrHorasHa && di > 0)
-    ? vz * (1e8 / (eRua * eEm)) * o.irrHorasHa * di : null;
-  o.irrHorasHa = o.irrHorasHa === null ? null : round(o.irrHorasHa, 2);
-  o.aguaIrrigacao = o.irrLitrosHaAno === null ? null : round(o.irrLitrosHaAno / 1000, 2);
-  o.irrLPlantaDia = (o.irrLitrosHaAno !== null && o.irrPlantasHa > 0)
-    ? round(o.irrLitrosHaAno / di / (1e8 / (eRua * ePl)), 1) : null;
+  /* Calculadora auxiliar de 3.05 — ESTIMATIVA do uso de agua na irrigacao (m3/ha/ano).
+     1 mm = 10 m3/ha.  Metodos (irrMetodo):
+     gotejo:     m3/ha/h = 10.000/(linhas(m) x gotejadores(m)) x vazao(L/h)/1000
+                 horas/ano = meses x 4,3 x dias/semana x horas/dia
+     aspersao:   m3/ha/h = vazao(m3/h) x 10.000/(E1 x E2)
+                 m3/ha/ano = m3/ha/h x horas por posicao x irrigacoes/ano
+     pivo:       m3/ha/ano = lamina por volta (mm) x voltas/ano x 10
+     hidrometro: m3/ha/ano = volume anual (m3) / area irrigada (ha) */
+  var mt = resp.irrMetodo || null, nn = function (k) { var v = num(resp[k]); return v > 0 ? v : null; };
+  o.irrMetodo = mt; o.irrM3HaHora = null; o.irrHorasAno = null; o.aguaIrrigacao = null;
+  if (mt === 'gotejo') {
+    var gV = nn('irrGotVazao'), gE = nn('irrGotEsp'), gL = nn('irrGotLinha'),
+        gM = nn('irrMeses'), gD = nn('irrDiasSem'), gH = nn('irrHorasDia');
+    if (gV && gE && gL) o.irrM3HaHora = (1e4 / ((gL / 100) * (gE / 100))) * gV / 1000;
+    if (gM && gD && gH) o.irrHorasAno = gM * 4.3 * gD * gH;
+    if (o.irrM3HaHora !== null && o.irrHorasAno !== null) o.aguaIrrigacao = o.irrM3HaHora * o.irrHorasAno;
+  } else if (mt === 'aspersao') {
+    var aV = nn('irrAspVazao'), a1 = nn('irrAspE1'), a2 = nn('irrAspE2'),
+        aH = nn('irrAspHoras'), aN = nn('irrAspVezes');
+    if (aV && a1 && a2) o.irrM3HaHora = aV * 1e4 / (a1 * a2);
+    if (aH && aN) o.irrHorasAno = aH * aN;
+    if (o.irrM3HaHora !== null && o.irrHorasAno !== null) o.aguaIrrigacao = o.irrM3HaHora * o.irrHorasAno;
+  } else if (mt === 'pivo') {
+    var pL = nn('irrPivoLamina'), pN = nn('irrPivoVoltas');
+    if (pL && pN) o.aguaIrrigacao = pL * pN * 10;
+  } else if (mt === 'hidrometro') {
+    var hV = nn('irrHidVolume'), hA = nn('irrHidArea');
+    if (hV && hA) o.aguaIrrigacao = hV / hA;
+  }
+  o.irrM3HaHora = o.irrM3HaHora === null ? null : round(o.irrM3HaHora, 2);
+  o.irrHorasAno = o.irrHorasAno === null ? null : round(o.irrHorasAno, 1);
+  o.aguaIrrigacao = o.aguaIrrigacao === null ? null : round(o.aguaIrrigacao, 2);
+  o.irrMmAno = o.aguaIrrigacao === null ? null : round(o.aguaIrrigacao / 10, 1);
+  o.irrAlertaAlto = o.irrMmAno !== null && o.irrMmAno > IRR_ALERTA_MM;
   return o;
 }
 
@@ -2502,51 +2519,90 @@ function anexar(it, file) {
     .then(function () { registrar(true); }, function () { registrar(false); });
 }
 
-/* ---- Calculadora auxiliar do item 3.05 (uso de água na irrigação) ---- */
+/* ---- Calculadora auxiliar do item 3.05 (estimativa do uso de água na irrigação) ---- */
+var IRR_METODOS = {
+  gotejo:     { nome:'Gotejo', campos:[
+    ['irrGotVazao','Vazão do gotejador (L/h) — impressa na mangueira','ex.: 1,6', 10],
+    ['irrGotEsp','Distância entre gotejadores (cm)','ex.: 50'],
+    ['irrGotLinha','Distância entre linhas de café (cm)','ex.: 350'],
+    ['irrMeses','Quantos meses irrigou no ano?','ex.: 6', 12],
+    ['irrDiasSem','Quantos dias por semana?','ex.: 3', 7],
+    ['irrHorasDia','Quantas horas cada setor fica ligado por dia?','ex.: 4', 24]] },
+  aspersao:   { nome:'Aspersão', campos:[
+    ['irrAspVazao','Vazão do aspersor (m³/h)','ex.: 1,8', 30],
+    ['irrAspE1','Distância entre aspersores (m)','ex.: 12'],
+    ['irrAspE2','Distância entre linhas de aspersores (m)','ex.: 18'],
+    ['irrAspHoras','Horas em cada posição por irrigação','ex.: 2', 24],
+    ['irrAspVezes','Quantas irrigações no ano?','ex.: 20', 365]] },
+  pivo:       { nome:'Pivô central', campos:[
+    ['irrPivoLamina','Lâmina por volta (mm) — painel ou produtor','ex.: 6', 40],
+    ['irrPivoVoltas','Quantas voltas no ano?','ex.: 50', 365]] },
+  hidrometro: { nome:'Tenho hidrômetro / outorga', campos:[
+    ['irrHidVolume','Volume usado no ano (m³)','ex.: 30000'],
+    ['irrHidArea','Área irrigada (ha)','ex.: 10']] }
+};
 function painelIrrigacao() {
-  var r = S.reg, c = r.calculados || {}, box = el('div','repeater'), campos, res, ins, i, btn;
+  var r = S.reg, c = r.calculados || {}, box = el('div','repeater'), campos, res, ins, i, btn,
+      mt = r.respostas.irrMetodo || '', def = IRR_METODOS[mt];
 
-  box.innerHTML = '<div class="repHead"><strong>3.05 · Calculadora do uso de água</strong>' +
-    '<span>Preencha os dados do sistema de irrigação. O valor em m³/ha/ano é calculado ' +
-    'e preenchido automaticamente na pergunta 3.05. <b>Horas de irrigação</b> = total de horas por dia ' +
-    'necessárias para irrigar a <b>área total</b> de café (todos os setores somados); o app divide ' +
-    'automaticamente pela área informada em 1.11.</span></div>';
+  box.innerHTML = '<div class="repHead"><strong>3.05 · Estimativa do uso de água na irrigação</strong>' +
+    '<span>Escolha o sistema e responda as perguntas com o produtor. O volume em m³/ha/ano é ' +
+    'estimado e preenchido automaticamente na pergunta 3.05.</span></div>';
 
+  var sel = el('label','cp');
+  sel.innerHTML = '<span>Sistema de irrigação</span><select data-irm="1"><option value="">Selecione…</option>' +
+    Object.keys(IRR_METODOS).map(function (k) {
+      return '<option value="' + k + '"' + (k === mt ? ' selected' : '') + '>' + esc(IRR_METODOS[k].nome) + '</option>';
+    }).join('') + '</select>';
+  box.appendChild(sel);
+  sel.querySelector('select').onchange = function (e) {
+    var antes = r.respostas.irrMetodo;
+    r.respostas.irrMetodo = e.target.value || null;
+    salvar(r, 'irrMetodo', antes, r.respostas.irrMetodo);
+    renderAbas(); renderSecao();
+  };
+  if (!def) return box;
+
+  var alertas = [];
   campos = el('div','fcGrid');
-  campos.innerHTML = [
-    ['irrRua','Espaçamento entre ruas (cm)','ex.: 350'],
-    ['irrPlanta','Espaçamento entre plantas (cm)','ex.: 100'],
-    ['irrEspEmissor','Espaçamento do aspersor/gotejo (cm)','ex.: 50'],
-    ['irrVazao','Vazão do emissor (L/h)','ex.: 1,6'],
-    ['irrHoras','Horas para irrigar a área total (horas)','ex.: 12'],
-    ['irrDias','Dias de irrigação no ano (dias)','ex.: 90']
-  ].map(function (f) {
+  campos.innerHTML = def.campos.map(function (f) {
     var v = r.respostas[f[0]];
+    if (f[3] && v !== null && v !== undefined && v !== '' && Number(v) > f[3])
+      alertas.push(f[1] + ': valor acima do normal (' + fmtN(Number(v)) + '). Confira.');
     return '<label class="cp"><span>' + esc(f[1]) + '</span>' +
-      '<input type="number" step="any" inputmode="decimal" value="' +
+      '<input type="number" step="any" min="0" inputmode="decimal" value="' +
       (v === null || v === undefined ? '' : esc(v)) + '" data-ir="' + f[0] + '"' +
       (f[2] ? ' placeholder="' + esc(f[2]) + '"' : '') + '></label>';
   }).join('');
   box.appendChild(campos);
 
-  res = el('div','fertRes');
   var fx = function (v, suf) { return (v === null || v === undefined) ? '—' : fmtN(v) + (suf || ''); };
+  var calcOk = c.irrMetodo === mt;
+  res = el('div','fertRes');
   res.innerHTML =
-    '<div><span>Emissores / ha</span><strong>' + fx(c.irrEmissoresHa) + '</strong></div>' +
-    '<div><span>Área de café</span><strong>' + fx(c.irrAreaUsada, ' ha') + '</strong></div>' +
-    '<div><span>Horas / ha / dia</span><strong>' + fx(c.irrHorasHa) + '</strong></div>' +
-    '<div><span>Plantas / ha</span><strong>' + fx(c.irrPlantasHa) + '</strong></div>' +
-    '<div><span>L / planta / dia</span><strong>' + fx(c.irrLPlantaDia) + '</strong></div>' +
-    '<div><span>m³ / ha / ano</span><strong>' + fx(c.aguaIrrigacao) + '</strong></div>' +
+    ((mt === 'gotejo' || mt === 'aspersao')
+      ? '<div><span>m³ / ha / hora</span><strong>' + fx(calcOk ? c.irrM3HaHora : null) + '</strong></div>' +
+        '<div><span>Horas / ano</span><strong>' + fx(calcOk ? c.irrHorasAno : null) + '</strong></div>' : '') +
+    '<div><span>mm / ano</span><strong>' + fx(calcOk ? c.irrMmAno : null) + '</strong></div>' +
+    '<div><span>m³ / ha / ano</span><strong>' + fx(calcOk ? c.aguaIrrigacao : null) + '</strong></div>' +
     '<div><span>Em 3.05</span><strong>' +
       (r.respostas.q305 === null || r.respostas.q305 === undefined || r.respostas.q305 === ''
         ? '—' : fmtN(r.respostas.q305)) + '</strong></div>';
   box.appendChild(res);
 
-  btn = el('button','addFert','Aplicar o valor calculado em 3.05');
+  if (calcOk && c.irrAlertaAlto)
+    alertas.push('Volume alto: ' + fmtN(c.irrMmAno) + ' mm/ano (acima de ' + IRR_ALERTA_MM + ' mm). Confira os dados com o produtor.');
+  if (alertas.length) {
+    var al = el('p','nota');
+    al.style.color = '#b45309'; al.style.fontWeight = '600';
+    al.innerHTML = alertas.map(function (a) { return '⚠ ' + esc(a); }).join('<br>');
+    box.appendChild(al);
+  }
+
+  btn = el('button','addFert','Aplicar o valor estimado em 3.05');
   btn.onclick = function () {
-    if (c.aguaIrrigacao === null || c.aguaIrrigacao === undefined) {
-      aviso('Preencha espaçamento entre ruas, espaçamento do emissor, vazão, horas totais, dias de irrigação e a área de café (1.11).','alerta');
+    if (!calcOk || c.aguaIrrigacao === null || c.aguaIrrigacao === undefined) {
+      aviso('Preencha todos os campos do sistema selecionado.','alerta');
       return;
     }
     var antes = r.respostas.q305;
@@ -2557,10 +2613,13 @@ function painelIrrigacao() {
   };
   box.appendChild(btn);
 
-  box.appendChild(el('p','nota','Cálculo: emissores/ha = 10.000 m² ÷ (rua × espaçamento do emissor, em m); ' +
-    'horas/ha/dia = horas por dia para irrigar a área total ÷ área de café (1.11); ' +
-    'm³/ha/ano = vazão (L/h) × emissores/ha × horas/ha/dia × dias ÷ 1.000. ' +
-    'Espaçamentos em cm são convertidos automaticamente. Referência da planilha: cerca de 400 L por árvore por rodada. ' +
+  var formula = {
+    gotejo: 'm³/ha/ano = 10.000 ÷ (linhas × gotejadores, em m) × vazão (L/h) ÷ 1.000 × horas/ano; horas/ano = meses × 4,3 × dias/semana × horas/dia.',
+    aspersao: 'm³/ha/ano = vazão (m³/h) × 10.000 ÷ (E1 × E2) × horas por posição × irrigações/ano.',
+    pivo: 'm³/ha/ano = lâmina por volta (mm) × voltas/ano × 10.',
+    hidrometro: 'm³/ha/ano = volume anual (m³) ÷ área irrigada (ha). É o dado mais confiável quando existe.'
+  }[mt];
+  box.appendChild(el('p','nota','Cálculo: ' + formula + ' Referência: 1 mm = 10 m³/ha. ' +
     'Você pode digitar o valor diretamente em 3.05 se preferir.'));
 
   ins = box.querySelectorAll('[data-ir]');
@@ -2568,8 +2627,8 @@ function painelIrrigacao() {
     var k = e.target.getAttribute('data-ir'), antes = r.respostas[k];
     r.respostas[k] = e.target.value === '' ? null : Number(e.target.value);
     salvar(r, k, antes, r.respostas[k]);
-    /* preenche 3.05 automaticamente assim que o cálculo fica completo */
-    if (r.calculados && r.calculados.aguaIrrigacao !== null &&
+    /* preenche 3.05 automaticamente assim que a estimativa fica completa */
+    if (r.calculados && r.calculados.irrMetodo === mt && r.calculados.aguaIrrigacao !== null &&
         r.calculados.aguaIrrigacao !== undefined) {
       var ant305 = r.respostas.q305;
       r.respostas.q305 = r.calculados.aguaIrrigacao;
@@ -2825,18 +2884,17 @@ function rodarTestes() {
   T('Ureia/KCl: N aplicado por ha', 65, cu.nAplicadoHa);
   T('Ureia/KCl: PN = 3000/65', 46.15, cu.pn);
 
-  /* Calculadora de irrigação: rua 350 cm × emissor 50 cm → 5.714,29 emissores/ha;
-     40 h/dia ÷ 10 ha = 4 h/ha/dia; 1,6 L/h × 4 h × 90 dias → 3.291,43 m³/ha/ano */
-  var ci = calcular({ irrRua:350, irrPlanta:100, irrEspEmissor:50, irrVazao:1.6, irrHoras:40, irrDias:90, q111ha:10 }, []);
-  T('Irrigação: horas/ha/dia', 4, ci.irrHorasHa);
-  T('Irrigação: sem área não calcula', null,
-    calcular({ irrRua:350, irrPlanta:100, irrEspEmissor:50, irrVazao:1.6, irrHoras:40, irrDias:90 }, []).aguaIrrigacao);
-  T('Irrigação: emissores/ha', 5714, ci.irrEmissoresHa);
-  T('Irrigação: plantas/ha', 2857, ci.irrPlantasHa);
-  T('Irrigação: m³/ha/ano', 3291.43, ci.aguaIrrigacao);
-  T('Irrigação: L/planta/dia', 12.8, ci.irrLPlantaDia);
-  T('Irrigação: incompleta não calcula', null,
-    calcular({ irrRua:350, irrVazao:1.6, irrHoras:4 }, []).aguaIrrigacao);
+  /* Estimativa de irrigação (m³/ha/ano) */
+  var cg = calcular({ irrMetodo:'gotejo', irrGotVazao:1.6, irrGotEsp:50, irrGotLinha:350, irrMeses:6, irrDiasSem:3, irrHorasDia:4 }, []);
+  T('Irrigação gotejo: m³/ha/h', 9.14, cg.irrM3HaHora);
+  T('Irrigação gotejo: horas/ano', 309.6, cg.irrHorasAno);
+  T('Irrigação gotejo: m³/ha/ano', 2830.63, cg.aguaIrrigacao);
+  T('Irrigação aspersão: m³/ha/ano', 3333.33,
+    calcular({ irrMetodo:'aspersao', irrAspVazao:1.8, irrAspE1:12, irrAspE2:18, irrAspHoras:2, irrAspVezes:20 }, []).aguaIrrigacao);
+  T('Irrigação pivô: m³/ha/ano', 3000, calcular({ irrMetodo:'pivo', irrPivoLamina:6, irrPivoVoltas:50 }, []).aguaIrrigacao);
+  T('Irrigação hidrômetro: m³/ha/ano', 3000, calcular({ irrMetodo:'hidrometro', irrHidVolume:30000, irrHidArea:10 }, []).aguaIrrigacao);
+  T('Irrigação: incompleta não calcula', null, calcular({ irrMetodo:'pivo', irrPivoLamina:6 }, []).aguaIrrigacao);
+  T('Irrigação: sem método não calcula', null, calcular({ irrPivoLamina:6, irrPivoVoltas:50 }, []).aguaIrrigacao);
 
   var c = calcular(base(), f1);
   T('1.10c = 800/1000×100', 80, c.pctOrganico);
